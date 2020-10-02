@@ -4,9 +4,23 @@ version = "0.1.0"
 authors = ["Moritz Drexl <Moritz.Drexl@target.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+opengl = ["imgui-gfx-renderer/opengl"]
+directx = ["imgui-gfx-renderer/directx"]
+default = ["opengl"]
 
 [dependencies]
-ndarray = { version = "0.13.1", features = ["blas"] }
-cblas = "0.2.0"
-blas-src = { version = "0.6.1", features = ["accelerate"] }
+ndarray = { version = "0.13", features = ["blas"] }
+cblas = "0.2"
+blas-src = { version = "0.6", features = ["accelerate"] }
+
+gfx = "0.18"
+gfx_device_gl = "0.16"
+gfx_window_glutin = "0.31"
+glutin = "0.21"
+
+imgui = "0.5"
+imgui-gfx-renderer = "0.5"
+imgui-winit-support = { version = "0.5", default-features = false, features = ["winit-19"] }
+
+crossbeam = "0.7"

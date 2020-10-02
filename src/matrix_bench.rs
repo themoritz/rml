@@ -4,13 +4,9 @@ use cblas::*;
 use ndarray::prelude::*;
 
 fn nd_mult() {
-    let a = array![
-        [1.0, 4.0],
-        [2.0, 5.0],
-        [3.0, 6.0],
-    ];
+    let a = array![[1.0, 4.0], [2.0, 5.0], [3.0, 6.0],];
     let b = array![
-        [1.0, 5.0,  9.0],
+        [1.0, 5.0, 9.0],
         [2.0, 6.0, 10.0],
         [3.0, 7.0, 11.0],
         [4.0, 8.0, 12.0],
@@ -20,27 +16,29 @@ fn nd_mult() {
 
 fn blas_mult() {
     let (m, n, k) = (2, 4, 3);
-    let a = vec![
-        1.0, 4.0,
-        2.0, 5.0,
-        3.0, 6.0,
-    ];
+    let a = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let b = vec![
-        1.0, 5.0,  9.0,
-        2.0, 6.0, 10.0,
-        3.0, 7.0, 11.0,
-        4.0, 8.0, 12.0,
+        1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
     ];
-    let mut c = vec![
-        0.0, 0.0,
-        0.0, 0.0,
-        0.0, 0.0,
-        0.0, 0.0,
-    ];
+    let mut c = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
     unsafe {
-        dgemm(Layout::ColumnMajor, Transpose::None, Transpose::None,
-              m, n, k, 1.0, &a, m, &b, k, 0.0, &mut c, m);
+        dgemm(
+            Layout::ColumnMajor,
+            Transpose::None,
+            Transpose::None,
+            m,
+            n,
+            k,
+            1.0,
+            &a,
+            m,
+            &b,
+            k,
+            0.0,
+            &mut c,
+            m,
+        );
     }
 }
 
@@ -63,19 +61,11 @@ mod benchmarks {
 
     #[bench]
     fn b_blas_mult(b: &mut Bencher) {
-        b.iter(|| {
-            black_box({
-                blas_mult()
-            })
-        });
+        b.iter(|| black_box({ blas_mult() }));
     }
 
     #[bench]
     fn b_nd_mult(b: &mut Bencher) {
-        b.iter(|| {
-            black_box({
-                nd_mult()
-            })
-        });
+        b.iter(|| black_box({ nd_mult() }));
     }
 }
