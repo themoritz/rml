@@ -24,3 +24,4 @@ imgui-gfx-renderer = "0.5"
 imgui-winit-support = { version = "0.5", default-features = false, features = ["winit-19"] }
 
 crossbeam = "0.7"
+rand = "0.7"
