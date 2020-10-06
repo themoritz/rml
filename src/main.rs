@@ -1,6 +1,7 @@
 use crossbeam::TrySendError;
 use imgui::*;
 
+mod easy_21;
 mod imgui_support;
 mod learn;
 
@@ -10,9 +11,9 @@ fn main() {
     style.window_rounding = 0.0;
     style.scrollbar_rounding = 0.0;
 
-    let mut state: i32 = 0;
+    let mut state = easy_21::MCState::init();
 
-    let (req, resp) = learn::queryable_state(state, |s| *s = (*s + 1) % 10000000);
+    let (req, resp) = learn::queryable_state(state.clone(), easy_21::monte_carlo_control);
 
     system.main_loop(|_, ui| {
         for s in resp.try_iter() {
@@ -23,32 +24,37 @@ fn main() {
             panic!("Could not request state: Disconnected")
         }
 
-        Window::new(im_str!("Controls"))
+        Window::new(im_str!("Easy 21"))
             .size([400.0, 200.0], Condition::FirstUseEver)
+            .position([200.0, 350.0], Condition::FirstUseEver)
             .build(ui, || {
-                ui.text(im_str!("Hello world!"));
-                let mouse_pos = ui.io().mouse_pos;
-                ui.text(format!(
-                    "Mouse Position: ({:.0},{:.0})",
-                    mouse_pos[0], mouse_pos[1]
-                ));
-                ui.plot_lines(
-                    im_str!("Value Fn"),
-                    &[
-                        mouse_pos[0] / 10.0,
-                        mouse_pos[1] / 10.0,
-                        state as f32 / 100000.0,
-                    ],
-                )
-                .scale_min(0.0)
-                .scale_max(100.0)
-                .graph_size([100.0, 50.0])
-                .build();
-                ui.get_window_draw_list()
-                    .add_circle(mouse_pos, 50.0, [0.3, 0.5, 0.7, 0.6])
-                    .thickness(5.0)
-                    .num_segments(50)
-                    .build();
+                ui.text(im_str!("Episodes: {}", state.episodes));
+
+                let dl = ui.get_background_draw_list();
+                for player in 1..21 {
+                    for dealer in 1..10 {
+                        let s = easy_21::State { player, dealer };
+                        let value = state.v.get(&s).0;
+                        let color = [0.0, 0.0, 0.0, (value + 1.0) / 2.0];
+                        let x = player as f32 * 50.0;
+                        let y = dealer as f32 * 25.0;
+
+                        let xoff = -7.0;
+                        let yoff = -3.0;
+                        if state.q.get(&s, &easy_21::Action::Hit).0
+                            > state.q.get(&s, &easy_21::Action::Stick).0
+                        {
+                            dl.add_rect(
+                                [x + xoff, y + yoff],
+                                [x + 50.0 + xoff, y + 25.0 + yoff],
+                                [0.0, 0.8, 0.4, 1.0],
+                            )
+                            .filled(true)
+                            .build();
+                        }
+                        dl.add_text([x, y], color, im_str!("{:>5.2}", value));
+                    }
+                }
             });
     });
 }
