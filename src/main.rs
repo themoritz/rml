@@ -25,8 +25,8 @@ fn main() {
         }
 
         Window::new(im_str!("Easy 21"))
-            .size([400.0, 200.0], Condition::FirstUseEver)
-            .position([200.0, 350.0], Condition::FirstUseEver)
+            .size([200.0, 100.0], Condition::FirstUseEver)
+            .position([100.0, 600.0], Condition::FirstUseEver)
             .build(ui, || {
                 ui.text(im_str!("Episodes: {}", state.episodes));
 
@@ -34,7 +34,8 @@ fn main() {
                 for player in 1..21 {
                     for dealer in 1..10 {
                         let s = easy_21::State { player, dealer };
-                        let value = state.v.get(&s).0;
+                        let v = state.v.get(&s);
+                        let value = v.0;
                         let color = [0.0, 0.0, 0.0, (value + 1.0) / 2.0];
                         let x = player as f32 * 50.0;
                         let y = dealer as f32 * 25.0;

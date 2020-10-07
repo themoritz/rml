@@ -1,6 +1,5 @@
 use rand::distributions::{uniform::Uniform, Distribution};
 use rand::Rng;
-use std::collections::HashMap;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub struct State {
@@ -116,37 +115,73 @@ pub fn step<R: Rng>(rng: &mut R, state: State, action: Action) -> Sample {
 }
 
 #[derive(Clone)]
-pub struct V(HashMap<State, (f32, i32)>);
+pub struct V<T>(Vec<T>);
 
-impl V {
-    pub fn init() -> Self {
-        V(HashMap::new())
+impl<T> V<T> {
+    #[inline]
+    fn index(state: &State) -> usize {
+        (21 * state.player + state.dealer) as usize
     }
 
-    pub fn get(&self, state: &State) -> (f32, i32) {
-        self.0.get(state).map_or((0.0, 0), |v| *v)
+    pub fn init(v: T) -> Self
+    where
+        T: Clone,
+    {
+        V(vec![v; 21 * 21 + 21])
     }
 
-    pub fn set(&mut self, state: &State, v: f32, n: i32) -> &mut Self {
-        self.0.insert(*state, (v, n));
+    pub fn get(&self, state: &State) -> T
+    where
+        T: Copy,
+    {
+        self.0[Self::index(state)]
+    }
+
+    pub fn set(&mut self, state: &State, v: T) -> &mut Self {
+        self.0[Self::index(state)] = v;
+        self
+    }
+
+    fn transform<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        for v in self.0.iter_mut() {
+            *v = f(v);
+        }
         self
     }
 }
 
 #[derive(Clone)]
-pub struct Q(HashMap<(State, Action), (f32, i32)>);
+pub struct Q<T>(Vec<T>);
 
-impl Q {
-    pub fn init() -> Self {
-        Q(HashMap::new())
+impl<T> Q<T> {
+    #[inline]
+    fn index(state: &State, action: &Action) -> usize {
+        (21 * state.player + state.dealer) as usize
+            + match action {
+                Action::Stick => 21 * 21 + 21,
+                Action::Hit => 0,
+            }
     }
 
-    pub fn get(&self, state: &State, action: &Action) -> (f32, i32) {
-        self.0.get(&(*state, *action)).map_or((0.0, 0), |v| *v)
+    pub fn init(v: T) -> Self
+    where
+        T: Clone,
+    {
+        Q(vec![v; 2 * (21 * 21 + 21)])
     }
 
-    pub fn set(&mut self, state: &State, action: &Action, v: f32, n: i32) -> &mut Self {
-        self.0.insert((*state, *action), (v, n));
+    pub fn get(&self, state: &State, action: &Action) -> T
+    where
+        T: Copy,
+    {
+        self.0[Self::index(state, action)]
+    }
+
+    pub fn set(&mut self, state: &State, action: &Action, v: T) -> &mut Self {
+        self.0[Self::index(state, action)] = v;
         self
     }
 }
@@ -180,18 +215,18 @@ pub fn episode<R: Rng, P: Fn(&mut R, &State) -> Action>(
 pub fn monte_carlo_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
     rng: &mut R,
     policy: P,
-    v: &mut V,
+    v: &mut V<(f32, i32)>,
 ) {
     let (state_actions, reward) = episode(rng, policy);
     for (state, _) in state_actions {
         let (value, n) = v.get(&state);
         let new_n = n + 1;
         let new_value = value + 1.0 / (new_n as f32) * (reward as f32 - value);
-        v.set(&state, new_value, new_n);
+        v.set(&state, (new_value, new_n));
     }
 }
 
-fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f32, q: &Q, state: &State) -> Action {
+fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f32, q: &Q<(f32, i32)>, state: &State) -> Action {
     let q_hit = q.get(state, &Action::Hit).0;
     let q_stick = q.get(state, &Action::Stick).0;
     let threshold = if q_hit > q_stick {
@@ -208,7 +243,7 @@ fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f32, q: &Q, state: &State) -> Action
 
 fn greedy_episode<R: Rng>(rng: &mut R, mc_state: &MCState) -> (Vec<(State, Action)>, i32) {
     episode(rng, |rng, state| {
-        let n_0 = 100.0;
+        let n_0 = 10_000.0;
         let eps = n_0 / (n_0 + mc_state.v.get(state).1 as f32);
         epsilon_greedy(rng, eps, &mc_state.q, state)
     })
@@ -216,16 +251,16 @@ fn greedy_episode<R: Rng>(rng: &mut R, mc_state: &MCState) -> (Vec<(State, Actio
 
 #[derive(Clone)]
 pub struct MCState {
-    pub v: V,
-    pub q: Q,
+    pub v: V<(f32, i32)>,
+    pub q: Q<(f32, i32)>,
     pub episodes: i32,
 }
 
 impl MCState {
     pub fn init() -> Self {
         MCState {
-            v: V::init(),
-            q: Q::init(),
+            v: V::init((0.0, 0)),
+            q: Q::init((0.0, 0)),
             episodes: 0,
         }
     }
@@ -238,14 +273,43 @@ pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCState) {
         let (value, n) = mc_state.q.get(&state, &action);
         let new_n = n + 1;
         let new_value = value + 1.0 / (new_n as f32) * (reward as f32 - value);
-        mc_state.q.set(&state, &action, new_value, new_n);
+        mc_state.q.set(&state, &action, (new_value, new_n));
 
         // Update V
         let (_, n) = mc_state.v.get(&state);
         let q_hit = mc_state.q.get(&state, &Action::Hit).0;
         let q_stick = mc_state.q.get(&state, &Action::Stick).0;
-        mc_state.v.set(&state, q_hit.max(q_stick), n + 1);
+        mc_state.v.set(&state, (q_hit.max(q_stick), n + 1));
     }
     // Inc episodes
     mc_state.episodes += 1;
+}
+
+pub struct TDState {
+    v: V<f32>,
+    eligibility_traces: V<f32>,
+}
+
+/// One episode, will be looped over by the main loop.
+pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
+    rng: &mut R,
+    lambda: f32,
+    policy: P,
+    td_state: &mut TDState,
+) {
+    let mut state = State::init(rng);
+    loop {
+        let action = policy(rng, &state);
+        let sample = step(rng, state, action);
+
+        let next_state = sample.state;
+
+        // Update eligibility traces
+        td_state.eligibility_traces.transform(|v| v * lambda);
+        td_state.eligibility_traces.set(&state, td_state.eligibility_traces.get(&state) + 1.0);
+
+        if sample.terminal {
+            break;
+        }
+    }
 }
