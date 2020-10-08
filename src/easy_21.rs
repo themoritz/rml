@@ -114,20 +114,35 @@ pub fn step<R: Rng>(rng: &mut R, state: State, action: Action) -> Sample {
     }
 }
 
+#[inline]
+fn cube_index(point: [i32; 3], max: [i32; 3]) -> usize {
+    let layers = point[2] * max[0] * max[1];
+    let rows = point[1] * max[0];
+    let bits = point[0];
+    (layers + rows + bits) as usize
+}
+
+fn cube_size(max: [i32; 3]) -> usize {
+    (max[0] * max[1] * max[2]) as usize
+}
+
 #[derive(Clone)]
 pub struct V<T>(Vec<T>);
 
 impl<T> V<T> {
+    const MAX: [i32; 3] = [41, 41, 1];
+
     #[inline]
     fn index(state: &State) -> usize {
-        (21 * state.player + state.dealer) as usize
+        let point = [state.player + 10, state.dealer + 10, 0];
+        cube_index(point, Self::MAX)
     }
 
     pub fn init(v: T) -> Self
     where
         T: Clone,
     {
-        V(vec![v; 21 * 21 + 21])
+        V(vec![v; cube_size(Self::MAX)])
     }
 
     pub fn get(&self, state: &State) -> T
@@ -142,13 +157,35 @@ impl<T> V<T> {
         self
     }
 
-    fn transform<F>(&mut self, f: F) -> &mut Self
+    fn update<F>(&mut self, state: &State, f: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        let i = Self::index(state);
+        self.0[i] = f(&self.0[i]);
+        self
+    }
+
+    fn map<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn(&T) -> T,
     {
         for v in self.0.iter_mut() {
             *v = f(v);
         }
+        self
+    }
+
+    fn zip_with<F, U>(&mut self, other: &V<U>, f: F) -> &mut Self
+    where
+        F: Fn(&T, &U) -> T,
+    {
+        self.0 = self
+            .0
+            .iter()
+            .zip(other.0.iter())
+            .map(|(t, u)| f(t, u))
+            .collect();
         self
     }
 }
@@ -258,7 +295,7 @@ pub struct MCState {
 
 impl MCState {
     pub fn init() -> Self {
-        MCState {
+        Self {
             v: V::init((0.0, 0)),
             q: Q::init((0.0, 0)),
             episodes: 0,
@@ -285,15 +322,28 @@ pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCState) {
     mc_state.episodes += 1;
 }
 
+#[derive(Clone)]
 pub struct TDState {
-    v: V<f32>,
-    eligibility_traces: V<f32>,
+    pub v: V<f32>,
+    pub eligibility_traces: V<f32>,
+    pub episodes: i32,
+}
+
+impl TDState {
+    pub fn init() -> Self {
+        Self {
+            v: V::init(0.0),
+            eligibility_traces: V::init(0.0),
+            episodes: 0,
+        }
+    }
 }
 
 /// One episode, will be looped over by the main loop.
 pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
     rng: &mut R,
     lambda: f32,
+    alpha: f32,
     policy: P,
     td_state: &mut TDState,
 ) {
@@ -305,11 +355,22 @@ pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
         let next_state = sample.state;
 
         // Update eligibility traces
-        td_state.eligibility_traces.transform(|v| v * lambda);
-        td_state.eligibility_traces.set(&state, td_state.eligibility_traces.get(&state) + 1.0);
+        td_state.eligibility_traces.map(|v| v * lambda);
+        td_state.eligibility_traces.update(&state, |v| v + 1.0);
+
+        let td_error =
+            (sample.reward as f32) + td_state.v.get(&next_state) - td_state.v.get(&state);
+        td_state
+            .v
+            .zip_with(&td_state.eligibility_traces, |v, eligibility| {
+                v + alpha * td_error * eligibility
+            });
 
         if sample.terminal {
             break;
+        } else {
+            state = next_state;
         }
     }
+    td_state.episodes += 1;
 }

@@ -25,3 +25,6 @@ imgui-winit-support = { version = "0.5", default-features = false, features = ["
 
 crossbeam = "0.7"
 rand = "0.7"
+
+plotters = { version = "0.3", default-features = false }
+plotters-imgui = { path = "../plotters-imgui" }
