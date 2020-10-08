@@ -2,12 +2,17 @@ use crossbeam::{channel, Receiver, Sender, TrySendError};
 use rand::{prelude::ThreadRng, thread_rng};
 use std::thread;
 
-pub fn queryable_state<S, F>(mut state: S, update: F) -> (Sender<()>, Receiver<S>)
+pub enum Req<S> {
+    GetState,
+    SetState { state: S },
+}
+
+pub fn queryable_state<S, F>(mut state: S, update: F) -> (Sender<Req<S>>, Receiver<S>)
 where
     S: Clone + Send + 'static,
     F: Fn(&mut ThreadRng, &mut S) + Send + 'static,
 {
-    let (req_s, req_r) = channel::bounded(1);
+    let (req_s, req_r) = channel::bounded(2);
     let (resp_s, resp_r) = channel::bounded(1);
 
     thread::spawn(move || {
@@ -16,12 +21,17 @@ where
             update(&mut rng, &mut state);
 
             // Send state to response channel if requested.
-            if let Ok(_) = req_r.try_recv() {
-                if let Err(TrySendError::Disconnected(_)) = resp_s.try_send(state.clone()) {
-                    panic!("Could not respond state: Disconnected")
+            if let Ok(req) = req_r.try_recv() {
+                match req {
+                    Req::GetState => {
+                        if let Err(TrySendError::Disconnected(_)) = resp_s.try_send(state.clone()) {
+                            panic!("Could not respond state: Disconnected")
+                        }
+                    },
+                    Req::SetState { state: new_state } => {
+                        state = new_state
+                    },
                 }
-                // We don't want requests to pile up so we empty the queue after responding.
-                for _ in req_r.try_iter() {}
             }
         }
     });

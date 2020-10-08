@@ -47,7 +47,7 @@ impl Card {
         let v = Uniform::new_inclusive(1, 10);
         Self {
             value: v.sample(rng),
-            color: if rng.gen::<f32>() < (1.0 / 3.0) {
+            color: if rng.gen::<f64>() < (1.0 / 3.0) {
                 Color::Red
             } else {
                 Color::Black
@@ -124,6 +124,10 @@ fn cube_index(point: [i32; 3], max: [i32; 3]) -> usize {
 
 fn cube_size(max: [i32; 3]) -> usize {
     (max[0] * max[1] * max[2]) as usize
+}
+
+pub trait HasV {
+    fn get_v(&self, state: &State) -> f64;
 }
 
 #[derive(Clone)]
@@ -249,21 +253,43 @@ pub fn episode<R: Rng, P: Fn(&mut R, &State) -> Action>(
     (state_actions, reward)
 }
 
-pub fn monte_carlo_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
-    rng: &mut R,
-    policy: P,
-    v: &mut V<(f32, i32)>,
-) {
-    let (state_actions, reward) = episode(rng, policy);
-    for (state, _) in state_actions {
-        let (value, n) = v.get(&state);
-        let new_n = n + 1;
-        let new_value = value + 1.0 / (new_n as f32) * (reward as f32 - value);
-        v.set(&state, (new_value, new_n));
+#[derive(Clone)]
+pub struct MCState {
+    pub v: V<(f64, i32)>,
+    pub episodes: i32,
+}
+
+impl MCState {
+    pub fn init() -> Self {
+        Self {
+            v: V::init((0.0, 0)),
+            episodes: 0,
+        }
     }
 }
 
-fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f32, q: &Q<(f32, i32)>, state: &State) -> Action {
+impl HasV for MCState {
+    fn get_v(&self, state: &State) -> f64 {
+        self.v.get(state).0
+    }
+}
+
+pub fn monte_carlo_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
+    rng: &mut R,
+    policy: P,
+    mc_state: &mut MCState,
+) {
+    mc_state.episodes += 1;
+    let (state_actions, reward) = episode(rng, policy);
+    for (state, _) in state_actions {
+        let (value, n) = mc_state.v.get(&state);
+        let new_n = n + 1;
+        let new_value = value + 1.0 / (new_n as f64) * (reward as f64 - value);
+        mc_state.v.set(&state, (new_value, new_n));
+    }
+}
+
+fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f64, q: &Q<(f64, i32)>, state: &State) -> Action {
     let q_hit = q.get(state, &Action::Hit).0;
     let q_stick = q.get(state, &Action::Stick).0;
     let threshold = if q_hit > q_stick {
@@ -271,29 +297,29 @@ fn epsilon_greedy<R: Rng>(rng: &mut R, eps: f32, q: &Q<(f32, i32)>, state: &Stat
     } else {
         1.0 - eps / 2.0
     };
-    if rng.gen::<f32>() < threshold {
+    if rng.gen::<f64>() < threshold {
         Action::Stick
     } else {
         Action::Hit
     }
 }
 
-fn greedy_episode<R: Rng>(rng: &mut R, mc_state: &MCState) -> (Vec<(State, Action)>, i32) {
+fn greedy_episode<R: Rng>(rng: &mut R, mc_state: &MCControlState) -> (Vec<(State, Action)>, i32) {
     episode(rng, |rng, state| {
-        let n_0 = 10_000.0;
-        let eps = n_0 / (n_0 + mc_state.v.get(state).1 as f32);
+        let visited = mc_state.v.get(state).1 as f64;
+        let eps = 1.0 / (10.0 + visited / 100_000.0);
         epsilon_greedy(rng, eps, &mc_state.q, state)
     })
 }
 
 #[derive(Clone)]
-pub struct MCState {
-    pub v: V<(f32, i32)>,
-    pub q: Q<(f32, i32)>,
+pub struct MCControlState {
+    pub v: V<(f64, i32)>,
+    pub q: Q<(f64, i32)>,
     pub episodes: i32,
 }
 
-impl MCState {
+impl MCControlState {
     pub fn init() -> Self {
         Self {
             v: V::init((0.0, 0)),
@@ -303,13 +329,19 @@ impl MCState {
     }
 }
 
-pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCState) {
+impl HasV for MCControlState {
+    fn get_v(&self, state: &State) -> f64 {
+        self.v.get(state).0
+    }
+}
+
+pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCControlState) {
     let (state_actions, reward) = greedy_episode(rng, mc_state);
     for (state, action) in state_actions {
         // Update Q
         let (value, n) = mc_state.q.get(&state, &action);
         let new_n = n + 1;
-        let new_value = value + 1.0 / (new_n as f32) * (reward as f32 - value);
+        let new_value = value + 1.0 / (new_n as f64) * (reward as f64 - value);
         mc_state.q.set(&state, &action, (new_value, new_n));
 
         // Update V
@@ -324,8 +356,8 @@ pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCState) {
 
 #[derive(Clone)]
 pub struct TDState {
-    pub v: V<f32>,
-    pub eligibility_traces: V<f32>,
+    pub v: V<f64>,
+    pub eligibility_traces: V<f64>,
     pub episodes: i32,
 }
 
@@ -339,15 +371,21 @@ impl TDState {
     }
 }
 
+impl HasV for TDState {
+    fn get_v(&self, state: &State) -> f64 {
+        self.v.get(state)
+    }
+}
+
 /// One episode, will be looped over by the main loop.
 pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
     rng: &mut R,
-    lambda: f32,
-    alpha: f32,
+    lambda: f64,
     policy: P,
     td_state: &mut TDState,
 ) {
     let mut state = State::init(rng);
+    let alpha = 100.0 / (100.0 + td_state.episodes as f64);
     loop {
         let action = policy(rng, &state);
         let sample = step(rng, state, action);
@@ -359,7 +397,7 @@ pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
         td_state.eligibility_traces.update(&state, |v| v + 1.0);
 
         let td_error =
-            (sample.reward as f32) + td_state.v.get(&next_state) - td_state.v.get(&state);
+            (sample.reward as f64) + td_state.v.get(&next_state) - td_state.v.get(&state);
         td_state
             .v
             .zip_with(&td_state.eligibility_traces, |v, eligibility| {

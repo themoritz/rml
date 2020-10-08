@@ -7,18 +7,20 @@ mod easy_21;
 mod imgui_support;
 mod learn;
 
+use easy_21::HasV;
+
 fn main() {
     let mut system = imgui_support::init(file!());
     let style = system.imgui.style_mut().use_light_colors();
     style.window_rounding = 0.0;
     style.scrollbar_rounding = 0.0;
 
-    let mut state = easy_21::TDState::init();
-
-    // let (req, resp) = learn::queryable_state(state.clone(), easy_21::monte_carlo_control);
+    let mut state = easy_21::MCControlState::init();
 
     let (req, resp) = learn::queryable_state(state.clone(), |rng, s| {
-        easy_21::td_lambda_prediction(rng, 0.5, 0.001, easy_21::example_policy, s)
+        // easy_21::monte_carlo_prediction(rng, easy_21::example_policy, s)
+        // easy_21::td_lambda_prediction(rng, 0.5, easy_21::example_policy, s)
+        easy_21::monte_carlo_control(rng, s)
     });
 
     let mut pitch = 0.2;
@@ -29,7 +31,7 @@ fn main() {
             state = s
         }
         // Request state (to be available hopefully in the next frame).
-        if let Err(TrySendError::Disconnected(_)) = req.try_send(()) {
+        if let Err(TrySendError::Disconnected(_)) = req.try_send(learn::Req::GetState) {
             panic!("Could not request state: Disconnected")
         }
 
@@ -37,6 +39,13 @@ fn main() {
             .size([200.0, 200.0], Condition::FirstUseEver)
             .position([700.0, 100.0], Condition::FirstUseEver)
             .build(ui, || {
+                if ui.small_button(im_str!("Reset")) {
+                    req.send(learn::Req::SetState {
+                        state: easy_21::MCControlState::init(),
+                    })
+                    .unwrap();
+                }
+
                 ui.text(im_str!("Episodes: {}", state.episodes));
 
                 Slider::new(im_str!("Pitch"))
@@ -50,6 +59,7 @@ fn main() {
                     .build(ui, &mut yaw);
 
                 let dl = ui.get_background_draw_list();
+
                 let root = ImguiBackend::new(&ui, &dl, (700, 700)).into_drawing_area();
 
                 let mut chart = ChartBuilder::on(&root)
@@ -71,30 +81,52 @@ fn main() {
                     .draw()
                     .unwrap();
 
+                let states: Vec<_> = (1..21)
+                    .flat_map(|player| (1..10).map(move |dealer| easy_21::State { player, dealer }))
+                    .collect();
+
+                chart
+                    .draw_series(states.iter().map(|s| {
+                        let coord = |p: i32, d: i32| -> (f64, f64, f64) {
+                            (
+                                p as f64,
+                                state.get_v(&easy_21::State {
+                                    player: p,
+                                    dealer: d,
+                                }),
+                                d as f64,
+                            )
+                        };
+                        PathElement::new(
+                            vec![
+                                coord(s.player, s.dealer),
+                                coord(s.player + 1, s.dealer),
+                                coord(s.player + 1, s.dealer + 1),
+                                coord(s.player, s.dealer + 1),
+                                coord(s.player, s.dealer),
+                            ],
+                            BLACK.mix(0.6).stroke_width(1),
+                        )
+                    }))
+                    .unwrap();
+
                 chart
                     .draw_series(
-                        (1..21)
-                            .flat_map(|p| (1..10).map(|d| (p, d)).collect::<Vec<_>>())
-                            .map(|(player, dealer)| {
-                                let coord = |p: i32, d: i32| -> (f64, f64, f64) {
-                                    (
-                                        p as f64,
-                                        state.v.get(&easy_21::State {
-                                            player: p,
-                                            dealer: d,
-                                        }) as f64,
-                                        d as f64,
-                                    )
-                                };
-                                PathElement::new(
+                        states
+                            .iter()
+                            .filter(|s| {
+                                state.q.get(s, &easy_21::Action::Hit).0
+                                    >= state.q.get(s, &easy_21::Action::Stick).0
+                            })
+                            .map(|s| {
+                                Polygon::new(
                                     vec![
-                                        coord(player, dealer),
-                                        coord(player + 1, dealer),
-                                        coord(player + 1, dealer + 1),
-                                        coord(player, dealer + 1),
-                                        coord(player, dealer),
+                                        (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.1),
+                                        (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.1),
+                                        (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.9),
+                                        (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.9),
                                     ],
-                                    BLACK.mix(0.6).stroke_width(1),
+                                    &BLUE.mix(0.6),
                                 )
                             }),
                     )
