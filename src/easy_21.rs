@@ -198,20 +198,26 @@ impl<T> V<T> {
 pub struct Q<T>(Vec<T>);
 
 impl<T> Q<T> {
+    const MAX: [i32; 3] = [41, 41, 2];
+
     #[inline]
     fn index(state: &State, action: &Action) -> usize {
-        (21 * state.player + state.dealer) as usize
-            + match action {
-                Action::Stick => 21 * 21 + 21,
+        let point = [
+            state.player + 10,
+            state.dealer + 10,
+            match action {
                 Action::Hit => 0,
-            }
+                Action::Stick => 1,
+            },
+        ];
+        cube_index(point, Self::MAX)
     }
 
     pub fn init(v: T) -> Self
     where
         T: Clone,
     {
-        Q(vec![v; 2 * (21 * 21 + 21)])
+        Q(vec![v; cube_size(Self::MAX)])
     }
 
     pub fn get(&self, state: &State, action: &Action) -> T
@@ -223,6 +229,38 @@ impl<T> Q<T> {
 
     pub fn set(&mut self, state: &State, action: &Action, v: T) -> &mut Self {
         self.0[Self::index(state, action)] = v;
+        self
+    }
+
+    fn update<F>(&mut self, state: &State, action: &Action, f: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        let i = Self::index(state, action);
+        self.0[i] = f(&self.0[i]);
+        self
+    }
+
+    fn map<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        for v in self.0.iter_mut() {
+            *v = f(v);
+        }
+        self
+    }
+
+    fn zip_with<F, U>(&mut self, other: &Q<U>, f: F) -> &mut Self
+    where
+        F: Fn(&T, &U) -> T,
+    {
+        self.0 = self
+            .0
+            .iter()
+            .zip(other.0.iter())
+            .map(|(t, u)| f(t, u))
+            .collect();
         self
     }
 }
@@ -345,10 +383,9 @@ pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCControlState) {
         mc_state.q.set(&state, &action, (new_value, new_n));
 
         // Update V
-        let (_, n) = mc_state.v.get(&state);
         let q_hit = mc_state.q.get(&state, &Action::Hit).0;
         let q_stick = mc_state.q.get(&state, &Action::Stick).0;
-        mc_state.v.set(&state, (q_hit.max(q_stick), n + 1));
+        mc_state.v.update(&state, |(_, n)| (q_hit.max(q_stick), n + 1));
     }
     // Inc episodes
     mc_state.episodes += 1;
@@ -356,7 +393,7 @@ pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCControlState) {
 
 #[derive(Clone)]
 pub struct TDState {
-    pub v: V<f64>,
+    pub v: V<(f64, i32)>,
     pub eligibility_traces: V<f64>,
     pub episodes: i32,
 }
@@ -364,7 +401,7 @@ pub struct TDState {
 impl TDState {
     pub fn init() -> Self {
         Self {
-            v: V::init(0.0),
+            v: V::init((0.0, 0)),
             eligibility_traces: V::init(0.0),
             episodes: 0,
         }
@@ -373,7 +410,7 @@ impl TDState {
 
 impl HasV for TDState {
     fn get_v(&self, state: &State) -> f64 {
-        self.v.get(state)
+        self.v.get(state).0
     }
 }
 
@@ -384,8 +421,8 @@ pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
     policy: P,
     td_state: &mut TDState,
 ) {
+    td_state.eligibility_traces.map(|_| 0.0);
     let mut state = State::init(rng);
-    let alpha = 100.0 / (100.0 + td_state.episodes as f64);
     loop {
         let action = policy(rng, &state);
         let sample = step(rng, state, action);
@@ -397,17 +434,87 @@ pub fn td_lambda_prediction<R: Rng, P: Fn(&mut R, &State) -> Action>(
         td_state.eligibility_traces.update(&state, |v| v + 1.0);
 
         let td_error =
-            (sample.reward as f64) + td_state.v.get(&next_state) - td_state.v.get(&state);
+            (sample.reward as f64) + td_state.v.get(&next_state).0 - td_state.v.get(&state).0;
         td_state
             .v
-            .zip_with(&td_state.eligibility_traces, |v, eligibility| {
-                v + alpha * td_error * eligibility
+            .zip_with(&td_state.eligibility_traces, |(v, n), eligibility| {
+                let alpha = 1.0 / (10.0 + *n as f64);
+                (v + alpha * td_error * eligibility, *n)
             });
+        td_state.v.update(&state, |(v, n)| (*v, n + 1));
 
         if sample.terminal {
             break;
         } else {
             state = next_state;
+        }
+    }
+    td_state.episodes += 1;
+}
+
+#[derive(Clone)]
+pub struct TDControlState {
+    pub v: V<(f64, i32)>,
+    pub q: Q<(f64, i32)>,
+    pub eligibility_traces: Q<f64>,
+    pub episodes: i32,
+}
+
+impl TDControlState {
+    pub fn init() -> Self {
+        Self {
+            v: V::init((0.0, 0)),
+            q: Q::init((0.0, 0)),
+            eligibility_traces: Q::init(0.0),
+            episodes: 0,
+        }
+    }
+}
+
+impl HasV for TDControlState {
+    fn get_v(&self, state: &State) -> f64 {
+        self.v.get(state).0
+    }
+}
+
+pub fn td_lambda_control<R: Rng>(rng: &mut R, lambda: f64, td_state: &mut TDControlState) {
+    td_state.eligibility_traces.map(|_| 0.0);
+    let mut state = State::init(rng);
+
+    let eps = 1.0 / (10.0 + td_state.v.get(&state).1 as f64 / 10_000.0);
+    let mut action = epsilon_greedy(rng, eps, &td_state.q, &state);
+
+    loop {
+        let sample = step(rng, state, action);
+        let next_state = sample.state;
+
+        let eps = 1.0 / (10.0 + td_state.v.get(&next_state).1 as f64 / 10_000.0);
+        let next_action = epsilon_greedy(rng, eps, &td_state.q, &next_state);
+
+        // Update eligibility traces
+        td_state.eligibility_traces.map(|v| v * lambda);
+        td_state.eligibility_traces.update(&state, &action, |v| v + 1.0);
+
+        let td_error =
+            (sample.reward as f64) + td_state.q.get(&next_state, &next_action).0 - td_state.q.get(&state, &action).0;
+        td_state
+            .q
+            .zip_with(&td_state.eligibility_traces, |(v, n), eligibility| {
+                let alpha = 1.0 / (10.0 + *n as f64);
+                (v + alpha * td_error * eligibility, *n)
+            });
+        td_state.q.update(&state, &action, |(v, n)| (*v, *n + 1));
+
+        // Update V
+        let q_hit = td_state.q.get(&state, &Action::Hit).0;
+        let q_stick = td_state.q.get(&state, &Action::Stick).0;
+        td_state.v.update(&state, |(_, n)| (q_hit.max(q_stick), n + 1));
+
+        if sample.terminal {
+            break;
+        } else {
+            state = next_state;
+            action = next_action;
         }
     }
     td_state.episodes += 1;

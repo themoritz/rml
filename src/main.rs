@@ -15,12 +15,13 @@ fn main() {
     style.window_rounding = 0.0;
     style.scrollbar_rounding = 0.0;
 
-    let mut state = easy_21::MCControlState::init();
+    let mut state = easy_21::TDControlState::init();
 
     let (req, resp) = learn::queryable_state(state.clone(), |rng, s| {
         // easy_21::monte_carlo_prediction(rng, easy_21::example_policy, s)
+        // easy_21::monte_carlo_control(rng, s)
         // easy_21::td_lambda_prediction(rng, 0.5, easy_21::example_policy, s)
-        easy_21::monte_carlo_control(rng, s)
+        easy_21::td_lambda_control(rng, 0.5, s)
     });
 
     let mut pitch = 0.2;
@@ -41,7 +42,7 @@ fn main() {
             .build(ui, || {
                 if ui.small_button(im_str!("Reset")) {
                     req.send(learn::Req::SetState {
-                        state: easy_21::MCControlState::init(),
+                        state: easy_21::TDControlState::init(),
                     })
                     .unwrap();
                 }
