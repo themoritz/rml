@@ -37,8 +37,8 @@ fn main() {
         }
 
         Window::new(im_str!("Easy 21"))
-            .size([200.0, 200.0], Condition::FirstUseEver)
-            .position([700.0, 100.0], Condition::FirstUseEver)
+            .size([200.0, 150.0], Condition::FirstUseEver)
+            .position([70.0, 70.0], Condition::FirstUseEver)
             .build(ui, || {
                 if ui.small_button(im_str!("Reset")) {
                     req.send(learn::Req::SetState {
