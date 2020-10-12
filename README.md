@@ -1,5 +1,5 @@
 # Reinforcement Learning
 
-# Easy21
+## Easy21
 
 ![](docs/plot.png)

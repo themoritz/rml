@@ -7,7 +7,7 @@ mod easy_21;
 mod imgui_support;
 mod learn;
 
-use easy_21::HasV;
+use easy_21::{HasV, HasQ};
 
 fn main() {
     let mut system = imgui_support::init(file!());
@@ -15,17 +15,19 @@ fn main() {
     style.window_rounding = 0.0;
     style.scrollbar_rounding = 0.0;
 
-    let mut state = easy_21::TDControlState::init();
+    let mut state = easy_21::ApproxState::init();
 
     let (req, resp) = learn::queryable_state(state.clone(), |rng, s| {
         // easy_21::monte_carlo_prediction(rng, easy_21::example_policy, s)
         // easy_21::monte_carlo_control(rng, s)
         // easy_21::td_lambda_prediction(rng, 0.5, easy_21::example_policy, s)
-        easy_21::td_lambda_control(rng, 0.5, s)
+        // easy_21::td_lambda_control(rng, 0.6, s)
+        easy_21::approx_td_lambda_control(rng, 0.1, s)
     });
 
     let mut pitch = 0.2;
     let mut yaw = 0.5;
+    let mut rms: Vec<(f64, f64)> = vec![];
 
     system.main_loop(|_, ui| {
         for s in resp.try_iter() {
@@ -41,13 +43,15 @@ fn main() {
             .position([70.0, 70.0], Condition::FirstUseEver)
             .build(ui, || {
                 if ui.small_button(im_str!("Reset")) {
+                    rms = vec![];
                     req.send(learn::Req::SetState {
-                        state: easy_21::TDControlState::init(),
+                        state: easy_21::ApproxState::init(),
                     })
                     .unwrap();
                 }
 
                 ui.text(im_str!("Episodes: {}", state.episodes));
+                ui.text(im_str!("RMS Error: {:>5.2}", state.rms_error));
 
                 Slider::new(im_str!("Pitch"))
                     .range(0.0..=2.0)
@@ -60,10 +64,11 @@ fn main() {
                     .build(ui, &mut yaw);
 
                 let dl = ui.get_background_draw_list();
+                let root = ImguiBackend::new(&ui, &dl, (1400, 700)).into_drawing_area();
+                let areas = root.split_evenly((1, 2));
 
-                let root = ImguiBackend::new(&ui, &dl, (700, 700)).into_drawing_area();
-
-                let mut chart = ChartBuilder::on(&root)
+                // 3D
+                let mut chart = ChartBuilder::on(&areas[0])
                     .build_cartesian_3d(1.0..21.0, -1.0..1.0, 1.0..10.0)
                     .unwrap();
 
@@ -116,8 +121,8 @@ fn main() {
                         states
                             .iter()
                             .filter(|s| {
-                                state.q.get(s, &easy_21::Action::Hit).0
-                                    >= state.q.get(s, &easy_21::Action::Stick).0
+                                state.get_q(s, &easy_21::Action::Hit)
+                                    >= state.get_q(s, &easy_21::Action::Stick)
                             })
                             .map(|s| {
                                 Polygon::new(
@@ -132,6 +137,28 @@ fn main() {
                             }),
                     )
                     .unwrap();
+
+                // 2D
+                &mut rms.push((state.episodes as f64 / 1_000_000.0, state.rms_error));
+
+                let last = rms.last().map_or(0.1, |x| x.0).max(1.0);
+
+                let mut chart = ChartBuilder::on(&areas[1])
+                    .margin(200)
+                    .margin_left(50)
+                    .margin_top(50)
+                    .x_label_area_size(100)
+                    .y_label_area_size(30)
+                    .build_cartesian_2d(0.0..last, 0.0..10.0).unwrap();
+
+                chart.configure_mesh().draw().unwrap();
+
+                chart
+                    .draw_series(LineSeries::new(
+                        rms.clone(),
+                        &BLACK,
+                    )).unwrap();
+
             });
     });
 }
