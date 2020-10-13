@@ -27,10 +27,8 @@ where
                         if let Err(TrySendError::Disconnected(_)) = resp_s.try_send(state.clone()) {
                             panic!("Could not respond state: Disconnected")
                         }
-                    },
-                    Req::SetState { state: new_state } => {
-                        state = new_state
-                    },
+                    }
+                    Req::SetState { state: new_state } => state = new_state,
                 }
             }
         }

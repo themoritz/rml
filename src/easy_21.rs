@@ -1,13 +1,16 @@
-use rand::{Rng, distributions::{uniform::Uniform, Distribution}};
+use crate::imgui_support;
+use crate::learn;
 use crossbeam::TrySendError;
 use imgui::*;
 use plotters::prelude::*;
 use plotters_imgui::ImguiBackend;
-use crate::imgui_support;
-use crate::learn;
+use rand::{
+    distributions::{uniform::Uniform, Distribution},
+    Rng,
+};
 
 pub fn main() {
-    let mut system = imgui_support::init(file!());
+    let system = imgui_support::init(file!());
 
     let mut state = ApproxState::init();
 
@@ -115,8 +118,7 @@ pub fn main() {
                         states
                             .iter()
                             .filter(|s| {
-                                state.get_q(s, &Action::Hit)
-                                    >= state.get_q(s, &Action::Stick)
+                                state.get_q(s, &Action::Hit) >= state.get_q(s, &Action::Stick)
                             })
                             .map(|s| {
                                 Polygon::new(
@@ -143,16 +145,14 @@ pub fn main() {
                     .margin_top(50)
                     .x_label_area_size(100)
                     .y_label_area_size(30)
-                    .build_cartesian_2d(0.0..last, 0.0..10.0).unwrap();
+                    .build_cartesian_2d(0.0..last, 0.0..10.0)
+                    .unwrap();
 
                 chart.configure_mesh().draw().unwrap();
 
                 chart
-                    .draw_series(LineSeries::new(
-                        rms.clone(),
-                        &BLACK,
-                    )).unwrap();
-
+                    .draw_series(LineSeries::new(rms.clone(), &BLACK))
+                    .unwrap();
             });
     });
 }

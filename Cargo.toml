@@ -28,3 +28,5 @@ rand = "0.7"
 
 plotters = { version = "0.3", default-features = false, features = ["line_series"] }
 plotters-imgui = { path = "../plotters-imgui" }
+
+nom = { version = "5.1", default-features = false }

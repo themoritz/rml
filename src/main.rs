@@ -1,3 +1,3 @@
 fn main() {
-    rml::easy_21::main();
+    rml::mnist::main();
 }
