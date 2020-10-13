@@ -46,6 +46,10 @@ pub fn init(title: &str) -> System {
 
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
 
+    let style = imgui.style_mut().use_light_colors();
+    style.window_rounding = 0.0;
+    style.scrollbar_rounding = 0.0;
+
     let render_sys = RenderSystem::init(&mut imgui, builder, &events_loop);
     platform.attach_window(imgui.io_mut(), render_sys.window(), HiDpiMode::Rounded);
     System {
