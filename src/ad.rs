@@ -133,7 +133,9 @@ pub fn example() -> (Tape, f64, HashMap<String, f64>) {
     let x2 = t.var("x2");
     let sin = t.sin(x1);
     let mult = t.mult(x1, x2);
-    let y = t.add(sin, mult);
+    let lit = t.lit(1.0);
+    let add = t.add(sin, mult);
+    let y = t.add(add, lit);
     let result = t.eval(&[(x1, 1.0), (x2, 2.0)]);
     let grad = t.grad(y);
     (t, result, grad)
