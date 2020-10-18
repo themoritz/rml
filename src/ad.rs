@@ -140,3 +140,172 @@ pub fn example() -> (Tape, f64, HashMap<String, f64>) {
     let grad = t.grad(y);
     (t, result, grad)
 }
+
+pub mod vec {
+    use ndarray::prelude::*;
+    use petgraph::algo::toposort;
+    use petgraph::graph::{DiGraph, NodeIndex};
+
+    type T = ArrayD<f64>;
+
+    #[derive(Debug)]
+    enum Expr {
+        LitVec { value: T },
+        AddVec { left: NodeIndex, right: NodeIndex },
+        MultMat { mat: NodeIndex, vec: NodeIndex },
+        Sigma { vec: NodeIndex },
+        Relu { vec: NodeIndex },
+        Var { name: String },
+    }
+
+    #[derive(Debug)]
+    struct Node {
+        expr: Expr,
+        z: T,
+        w: T,
+    }
+
+    impl Node {
+        fn new(expr: Expr) -> Self {
+            Self {
+                expr,
+                z: T::zeros(IxDyn(&[0])),
+                w: T::zeros(IxDyn(&[0])),
+            }
+        }
+    }
+
+    fn sigma(x: &f64) -> f64 {
+        1.0 / (1.0 + (-x).exp())
+    }
+
+    fn sigma_deriv(x: &f64) -> f64 {
+        let ex = (-x).exp();
+        ex / (1.0 + ex) / (1.0 + ex)
+    }
+
+    fn relu(x: &f64) -> f64 {
+        if *x > 0.0 {
+            *x
+        } else {
+            0.0
+        }
+    }
+
+    fn relu_deriv(x: &f64) -> f64 {
+        if *x > 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Tape {
+        graph: DiGraph<Node, ()>,
+    }
+
+    impl Tape {
+        fn init() -> Self {
+            Self {
+                graph: DiGraph::new(),
+            }
+        }
+
+        fn lit(&mut self, value: T) -> NodeIndex {
+            self.graph.add_node(Node::new(Expr::LitVec { value }))
+        }
+
+        fn add_vec(&mut self, left: NodeIndex, right: NodeIndex) -> NodeIndex {
+            let new = self.graph.add_node(Node::new(Expr::AddVec { left, right }));
+            self.graph.add_edge(left, new, ());
+            self.graph.add_edge(right, new, ());
+            new
+        }
+
+        fn mult_mat(&mut self, mat: NodeIndex, vec: NodeIndex) -> NodeIndex {
+            let new = self.graph.add_node(Node::new(Expr::MultMat { mat, vec }));
+            self.graph.add_edge(mat, new, ());
+            self.graph.add_edge(vec, new, ());
+            new
+        }
+
+        fn sigma(&mut self, vec: NodeIndex) -> NodeIndex {
+            let new = self.graph.add_node(Node::new(Expr::Sigma { vec }));
+            self.graph.add_edge(vec, new, ());
+            new
+        }
+
+        fn relu(&mut self, vec: NodeIndex) -> NodeIndex {
+            let new = self.graph.add_node(Node::new(Expr::Relu { vec }));
+            self.graph.add_edge(vec, new, ());
+            new
+        }
+
+        fn var(&mut self, name: &str) -> NodeIndex {
+            self.graph.add_node(Node::new(Expr::Var {
+                name: name.to_string(),
+            }))
+        }
+
+        fn node(&self, ix: &NodeIndex) -> &Node {
+            self.graph.node_weight(*ix).unwrap()
+        }
+
+        fn eval(&mut self, var_values: Vec<(NodeIndex, T)>) -> T {
+            for (ix, value) in var_values {
+                self.graph.node_weight_mut(ix).unwrap().z = value;
+            }
+            let mut value = T::zeros(IxDyn(&[]));
+            for ix in toposort(&self.graph, None).unwrap() {
+                value = match &self.node(&ix).expr {
+                    Expr::LitVec { value } => value.clone(),
+                    Expr::AddVec { left, right } => &self.node(left).z + &self.node(right).z,
+                    Expr::MultMat { mat, vec } => self
+                        .node(mat)
+                        .z
+                        .clone()
+                        .into_dimensionality::<Ix2>()
+                        .unwrap()
+                        .dot(
+                            &self
+                                .node(vec)
+                                .z
+                                .clone()
+                                .into_dimensionality::<Ix1>()
+                                .unwrap(),
+                        )
+                        .into_dyn(),
+                    Expr::Sigma { vec } => self.node(vec).z.map(sigma),
+                    Expr::Relu { vec } => self.node(vec).z.map(relu),
+                    Expr::Var { .. } => self.node(&ix).z.clone(),
+                };
+                let node = self.graph.node_weight_mut(ix).unwrap();
+                node.z = value.clone();
+            }
+            value
+        }
+    }
+
+    pub fn example() -> (Tape, T) {
+        let mut t = Tape::init();
+        let a0 = t.lit(array![1.0, 2.0].into_dyn());
+        let w1 = t.var("w1");
+        let b1 = t.var("b1");
+        let m1 = t.mult_mat(w1, a0);
+        let z1 = t.add_vec(m1, b1);
+        let a1 = t.relu(z1);
+
+        // let w2 = t.var("w2");
+        // let b2 = t.var("b2");
+        // let m2 = t.mult_mat(w2, a1);
+        // let z2 = t.add_vec(m2, b2);
+        // let a2 = t.sigma(z2);
+
+        let result = t.eval(vec![
+            (w1, array![[1.0, 1.0], [2.0, 2.0]].into_dyn()),
+            (b1, array![1.0, 1.0].into_dyn()),
+        ]);
+        (t, result)
+    }
+}
