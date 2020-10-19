@@ -10,7 +10,8 @@ use nom::{
 pub fn main() {
     let system = imgui_support::init(file!());
 
-    println!("{:#?}", ad::example());
+    // println!("{:#?}", ad::example());
+    println!("{:#?}", ad::vec::example());
     std::process::exit(0);
 
     let bytes = std::fs::read("./resources/train-images-idx3-ubyte").unwrap();

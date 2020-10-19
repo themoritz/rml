@@ -145,6 +145,7 @@ pub mod vec {
     use ndarray::prelude::*;
     use petgraph::algo::toposort;
     use petgraph::graph::{DiGraph, NodeIndex};
+    use std::collections::HashMap;
 
     type T = ArrayD<f64>;
 
@@ -284,6 +285,31 @@ pub mod vec {
                 node.z = value.clone();
             }
             value
+        }
+
+        fn grad(&mut self, output: NodeIndex) -> HashMap<String, T> {
+            for n in self.graph.node_weights_mut() {
+                n.w = T::zeros(n.z.shape());
+            }
+            let n = self.graph.node_weight_mut(output).unwrap();
+            n.w = T::ones(n.z.shape());
+            self.graph.reverse();
+            for ix in toposort(&self.graph, None).unwrap() {
+                let n = self.node(&ix).clone();
+                let w = &n.w;
+                match &n.expr {
+                    Expr::LitVec { value } => {}
+                    Expr::AddVec { left, right } => {}
+                    Expr::MultMat { mat, vec } => {}
+                    Expr::Sigma { vec } => {}
+                    Expr::Relu { vec } => {}
+                    Expr::Var { name } => {}
+                }
+
+            }
+            self.graph.reverse();
+            let mut result: HashMap<String, T> = HashMap::new();
+            result
         }
     }
 
