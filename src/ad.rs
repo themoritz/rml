@@ -157,6 +157,7 @@ pub mod vec {
         Sigma { vec: NodeIndex },
         Relu { vec: NodeIndex },
         Var { name: String },
+        Loss { expected: T, actual: NodeIndex },
     }
 
     #[derive(Debug, Clone)]
@@ -249,6 +250,14 @@ pub mod vec {
             }))
         }
 
+        fn loss(&mut self, expected: T, actual: NodeIndex) -> NodeIndex {
+            let new = self
+                .graph
+                .add_node(Node::new(Expr::Loss { expected, actual }));
+            self.graph.add_edge(actual, new, ());
+            new
+        }
+
         fn node(&self, ix: &NodeIndex) -> &Node {
             self.graph.node_weight(*ix).unwrap()
         }
@@ -280,6 +289,14 @@ pub mod vec {
                     Expr::Sigma { vec } => self.node(vec).z.map(sigma),
                     Expr::Relu { vec } => self.node(vec).z.map(relu),
                     Expr::Var { .. } => self.node(&ix).z.clone(),
+                    Expr::Loss { expected, actual } => arr0(
+                        -0.5 * expected
+                            .into_iter()
+                            .zip(self.node(actual).z.into_iter())
+                            .map(|(y, a)| (y - a) * (y - a))
+                            .sum::<f64>(),
+                    )
+                    .into_dyn(),
                 };
                 let node = self.graph.node_weight_mut(ix).unwrap();
                 node.z = value.clone();
@@ -337,6 +354,15 @@ pub mod vec {
                     Expr::Var { name } => {
                         result.insert(name.clone(), n.w);
                     }
+                    Expr::Loss { expected, actual } => {
+                        let deriv: T = w
+                            .clone()
+                            .into_dimensionality::<Ix0>()
+                            .unwrap()
+                            .into_scalar()
+                            * (&expected - &self.node(&actual).z);
+                        self.graph.node_weight_mut(actual).unwrap().w += &deriv;
+                    }
                 }
             }
             self.graph.reverse();
@@ -360,6 +386,7 @@ pub mod vec {
         let m1 = t.mult_mat(w1, a0);
         let z1 = t.add_vec(m1, b1);
         let a1 = t.relu(z1);
+        let l = t.loss(array![6.0, 12.0].into_dyn(), a1);
 
         // let w2 = t.var("w2");
         // let b2 = t.var("b2");
@@ -371,7 +398,7 @@ pub mod vec {
             (w1, array![[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]].into_dyn()),
             (b1, array![1.0, 1.0].into_dyn()),
         ]);
-        let grad = t.grad(a1);
+        let grad = t.grad(l);
         (t, result, grad)
     }
 }
