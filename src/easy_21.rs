@@ -12,14 +12,14 @@ use rand::{
 pub fn main() {
     let system = imgui_support::init(file!());
 
-    let mut state = ApproxState::init();
+    let mut state = MCControlState::init();
 
     let (req, resp) = learn::queryable_state(state.clone(), |rng, s| {
         // monte_carlo_prediction(rng, easy_21::example_policy, s)
-        // monte_carlo_control(rng, s)
+        monte_carlo_control(rng, s)
         // td_lambda_prediction(rng, 0.5, easy_21::example_policy, s)
         // td_lambda_control(rng, 0.6, s)
-        approx_td_lambda_control(rng, 0.1, s)
+        // approx_td_lambda_control(rng, 0.1, s)
     });
 
     let mut pitch = 0.2;
@@ -42,13 +42,13 @@ pub fn main() {
                 if ui.small_button(im_str!("Reset")) {
                     rms = vec![];
                     req.send(learn::Req::SetState {
-                        state: ApproxState::init(),
+                        state: MCControlState::init(),
                     })
                     .unwrap();
                 }
 
                 ui.text(im_str!("Episodes: {}", state.episodes));
-                ui.text(im_str!("RMS Error: {:>5.2}", state.rms_error));
+                // ui.text(im_str!("RMS Error: {:>5.2}", state.rms_error));
 
                 Slider::new(im_str!("Pitch"))
                     .range(0.0..=2.0)
@@ -118,7 +118,7 @@ pub fn main() {
                         states
                             .iter()
                             .filter(|s| {
-                                state.get_q(s, &Action::Hit) >= state.get_q(s, &Action::Stick)
+                                state.q.get_q(s, &Action::Hit) >= state.q.get_q(s, &Action::Stick)
                             })
                             .map(|s| {
                                 Polygon::new(
@@ -135,7 +135,7 @@ pub fn main() {
                     .unwrap();
 
                 // 2D
-                &mut rms.push((state.episodes as f64 / 1_000_000.0, state.rms_error));
+                // &mut rms.push((state.episodes as f64 / 1_000_000.0, state.rms_error));
 
                 let last = rms.last().map_or(0.1, |x| x.0).max(1.0);
 

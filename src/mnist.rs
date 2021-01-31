@@ -1,5 +1,5 @@
-use crate::imgui_support;
 use crate::ad;
+use crate::imgui_support;
 use imgui::*;
 use nom::{
     bytes::complete::{tag, take},
@@ -10,8 +10,7 @@ use nom::{
 pub fn main() {
     let system = imgui_support::init(file!());
 
-    // println!("{:#?}", ad::example());
-    println!("{:#?}", ad::vec::example());
+    println!("{:#?}", ad::example());
     std::process::exit(0);
 
     let bytes = std::fs::read("./resources/train-images-idx3-ubyte").unwrap();
