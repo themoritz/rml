@@ -1,4 +1,4 @@
-use crossbeam::{channel, Receiver, Sender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use rand::{prelude::ThreadRng, thread_rng};
 use std::thread;
 
@@ -7,13 +7,13 @@ pub enum Req<S> {
     SetState { state: S },
 }
 
-pub fn queryable_state<S, F>(mut state: S, update: F) -> (Sender<Req<S>>, Receiver<S>)
+pub fn queryable_state<S, F>(mut state: S, update: F) -> (SyncSender<Req<S>>, Receiver<S>)
 where
     S: Clone + Send + 'static,
     F: Fn(&mut ThreadRng, &mut S) + Send + 'static,
 {
-    let (req_s, req_r) = channel::bounded(2);
-    let (resp_s, resp_r) = channel::bounded(1);
+    let (req_s, req_r) = sync_channel(2);
+    let (resp_s, resp_r) = sync_channel(1);
 
     thread::spawn(move || {
         let mut rng = thread_rng();
