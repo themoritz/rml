@@ -12,7 +12,7 @@ enum Expr {
     MultMat { mat: Ix, vec: Ix },
     Sigma { vec: Ix },
     Relu { vec: Ix },
-    Var { name: String },
+    Var { _name: String },
     Loss { expected: Ix, actual: Ix },
 }
 
@@ -105,7 +105,7 @@ impl Tape {
     /// Introduce a free variable.
     pub fn var(&mut self, name: &str) -> Ix {
         self.graph.add_node(Node::new(Expr::Var {
-            name: name.to_string(),
+            _name: name.to_string(),
         }))
     }
 
@@ -142,7 +142,7 @@ impl Tape {
     /// Forward evaluation.
     pub fn eval(&mut self) {
         for ix in &self.order {
-            self.graph.node_weight_mut(*ix).unwrap().z = match &self.node(&ix).expr {
+            self.graph.node_weight_mut(*ix).unwrap().z = match &self.node(ix).expr {
                 Expr::AddVec { left, right } => &self.node(left).z + &self.node(right).z,
                 Expr::MultMat { mat, vec } => self
                     .node(mat)
@@ -161,7 +161,7 @@ impl Tape {
                     .into_dyn(),
                 Expr::Sigma { vec } => self.node(vec).z.map(sigma),
                 Expr::Relu { vec } => self.node(vec).z.map(relu),
-                Expr::Var { .. } => self.node(&ix).z.clone(),
+                Expr::Var { .. } => self.node(ix).z.clone(),
                 Expr::Loss { expected, actual } => arr0(
                     -0.5 * self
                         .node(expected)
@@ -185,7 +185,7 @@ impl Tape {
         n.w = T::ones(n.z.shape());
 
         for ix in self.order.iter().rev() {
-            let n = self.node(&ix).clone();
+            let n = self.node(ix).clone();
             let w = &n.w;
             match n.expr {
                 Expr::AddVec { left, right } => {

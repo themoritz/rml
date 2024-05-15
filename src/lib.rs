@@ -2,7 +2,7 @@
 
 pub mod ad;
 pub mod app;
-// pub mod easy_21;
+pub mod easy_21;
 pub mod learn;
 pub mod matrix_bench;
 // pub mod mnist;

@@ -7,6 +7,8 @@ pub enum Req<S> {
     SetState { state: S },
 }
 
+/// Spawns a thread that runs `update` on `state` in a loop. The state can be queried and updated
+/// by sending `Req<S>` messages to the returned `SyncSender`.
 pub fn queryable_state<S, F>(mut state: S, update: F) -> (SyncSender<Req<S>>, Receiver<S>)
 where
     S: Clone + Send + 'static,
