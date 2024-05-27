@@ -10,10 +10,8 @@ use rand::{
 pub struct Easy21 {
     req: SyncSender<learn::Req<MCControlState>>,
     resp: Receiver<MCControlState>,
-    state: MCControlState,
 
-    pitch: f64,
-    yaw: f64,
+    chart: egui_plotter::Chart<MCControlState>,
     rms: Vec<(f64, f64)>,
 }
 
@@ -32,120 +30,138 @@ impl Easy21 {
             // td_lambda_control(rng, 0.6, s)
             // approx_td_lambda_control(rng, 0.1, s)
         );
+
+        let chart = egui_plotter::Chart::new(MCControlState::init())
+            .mouse(egui_plotter::MouseConfig::enabled())
+            .pitch(0.2)
+            .yaw(-0.5)
+            .builder_cb(Box::new(|area, transform, state| {
+                let mut chart = ChartBuilder::on(area)
+                    .build_cartesian_3d(1.0..21.0, -1.0..1.0, 1.0..10.0)
+                    .unwrap();
+
+                chart.with_projection(|mut p| {
+                    p.yaw = transform.yaw;
+                    p.pitch = transform.pitch;
+                    p.scale = 0.7;
+                    p.into_matrix()
+                });
+
+                chart
+                    .configure_axes()
+                    .x_labels(10)
+                    .y_labels(9)
+                    .z_labels(10)
+                    .draw()
+                    .unwrap();
+
+                let states: Vec<_> = (1..21)
+                    .flat_map(|player| (1..10).map(move |dealer| State { player, dealer }))
+                    .collect();
+
+                chart
+                    .draw_series(states.iter().map(|s| {
+                        let coord = |p: i32, d: i32| -> (f64, f64, f64) {
+                            (
+                                p as f64,
+                                state.get_v(&State {
+                                    player: p,
+                                    dealer: d,
+                                }),
+                                d as f64,
+                            )
+                        };
+                        PathElement::new(
+                            vec![
+                                coord(s.player, s.dealer),
+                                coord(s.player + 1, s.dealer),
+                                coord(s.player + 1, s.dealer + 1),
+                                coord(s.player, s.dealer + 1),
+                                coord(s.player, s.dealer),
+                            ],
+                            plotters::prelude::BLACK.mix(0.6).stroke_width(1),
+                        )
+                    }))
+                    .unwrap();
+
+                chart
+                    .draw_series(
+                        states
+                            .iter()
+                            .filter(|s| {
+                                state.q.get_q(s, &Action::Hit) >= state.q.get_q(s, &Action::Stick)
+                            })
+                            .map(|s| {
+                                Polygon::new(
+                                    vec![
+                                        (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.1),
+                                        (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.1),
+                                        (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.9),
+                                        (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.9),
+                                    ],
+                                    BLUE.mix(0.6),
+                                )
+                            }),
+                    )
+                    .unwrap();
+            }));
+
         Self {
             req,
             resp,
-            state: MCControlState::init(),
-            pitch: 0.2,
-            yaw: 0.5,
+            chart,
             rms: vec![],
         }
     }
 
-    pub fn ui_content(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ctx: &egui::Context) {
+        let state = self.chart.get_data_mut();
         for s in self.resp.try_iter() {
-            self.state = s
+            *state = s;
         }
+
         // Request state (to be available hopefully in the next frame).
         if let Err(TrySendError::Disconnected(_)) = self.req.try_send(learn::Req::GetState) {
             panic!("Could not request state: Disconnected")
         }
 
-        if ui.button("Reset").clicked() {
-            self.rms = vec![];
-            self.req.send(learn::Req::SetState {
-                state: MCControlState::init(),
-            })
-            .unwrap();
-        }
+        egui::Window::new("Easy21").show(ctx, |ui| {
 
-        ui.label(format!("Episodes: {}", self.state.episodes));
-        // ui.text(im_str!("RMS Error: {:>5.2}", state.rms_error));
+            if ui.button("Reset").clicked() {
+                self.rms = vec![];
+                self.req.send(learn::Req::SetState {
+                    state: MCControlState::init(),
+                })
+                .unwrap();
+            }
 
-        ui.add(egui::Slider::new(&mut self.pitch, 0.0..=2.0).text("Pitch"));
-        ui.add(egui::Slider::new(&mut self.yaw, -2.0..=2.0).text("Yaw"));
-
-        let root = egui_plotter::EguiBackend::new(ui).into_drawing_area();
-        let areas = root.split_evenly((1, 2));
-
-        // 3D
-        let mut chart = ChartBuilder::on(&areas[0])
-            .build_cartesian_3d(1.0..21.0, -1.0..1.0, 1.0..10.0)
-            .unwrap();
-
-        chart.with_projection(|mut p| {
-            p.yaw = -self.yaw;
-            p.pitch = self.pitch;
-            p.scale = 0.7;
-            p.into_matrix()
+            ui.label(format!("Episodes: {}", state.episodes));
         });
 
-        chart
-            .configure_axes()
-            .x_labels(10)
-            .y_labels(9)
-            .z_labels(10)
-            .draw()
-            .unwrap();
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.ui(ui);
+        });
+    }
 
-        let states: Vec<_> = (1..21)
-            .flat_map(|player| (1..10).map(move |dealer| State { player, dealer }))
-            .collect();
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        let space = ui.available_rect_before_wrap();
+        let (left_rect, right_rect) = space.split_left_right_at_fraction(0.5);
+        let left_ui = ui.child_ui(left_rect, egui::Layout::default());
+        let right_ui = ui.child_ui(right_rect, egui::Layout::default());
 
-        chart
-            .draw_series(states.iter().map(|s| {
-                let coord = |p: i32, d: i32| -> (f64, f64, f64) {
-                    (
-                        p as f64,
-                        self.state.get_v(&State {
-                            player: p,
-                            dealer: d,
-                        }),
-                        d as f64,
-                    )
-                };
-                PathElement::new(
-                    vec![
-                        coord(s.player, s.dealer),
-                        coord(s.player + 1, s.dealer),
-                        coord(s.player + 1, s.dealer + 1),
-                        coord(s.player, s.dealer + 1),
-                        coord(s.player, s.dealer),
-                    ],
-                    plotters::prelude::BLACK.mix(0.6).stroke_width(1),
-                )
-            }))
-            .unwrap();
-
-        chart
-            .draw_series(
-                states
-                    .iter()
-                    .filter(|s| {
-                        self.state.q.get_q(s, &Action::Hit) >= self.state.q.get_q(s, &Action::Stick)
-                    })
-                    .map(|s| {
-                        Polygon::new(
-                            vec![
-                                (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.1),
-                                (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.1),
-                                (s.player as f64 + 0.9, -1.0, s.dealer as f64 + 0.9),
-                                (s.player as f64 + 0.1, -1.0, s.dealer as f64 + 0.9),
-                            ],
-                            BLUE.mix(0.6),
-                        )
-                    }),
-            )
-            .unwrap();
+        // 3D
+        self.chart.draw(&left_ui);
 
         // 2D
-        if self.state.episodes > 1 && ui.ctx().frame_nr() % 5 == 0 {
-            self.rms.push((self.state.episodes as f64 / 1_000_000.0, self.state.q.rms_error()));
+        let area = egui_plotter::EguiBackend::new(&right_ui).into_drawing_area();
+        let state = self.chart.get_data();
+        if state.episodes > 1 && ui.ctx().frame_nr() % 5 == 0 {
+            self.rms.push((state.episodes as f64 / 1_000_000.0, state.q.rms_error()));
         }
 
         let last = self.rms.last().map_or(0.1, |x| x.0).max(1.0);
 
-        let mut chart = ChartBuilder::on(&areas[1])
+        let mut chart = ChartBuilder::on(&area)
             .margin(200)
             .margin_left(50)
             .margin_top(50)

@@ -5,9 +5,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Disable feathering
-        cc.egui_ctx.tessellation_options_mut(|o| o.feathering = false);
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self {
             easy_21: easy_21::Easy21::new(),
         }
@@ -16,10 +14,8 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.easy_21.ui_content(ui);
+        self.easy_21.show(ctx);
 
-            ctx.request_repaint();
-        });
+        ctx.request_repaint();
     }
 }
