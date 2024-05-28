@@ -1,17 +1,37 @@
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
-
-use crate::learn;
+use egui::Grid;
 use plotters::prelude::*;
 use rand::{
     distributions::{uniform::Uniform, Distribution},
     Rng,
 };
 
-pub struct Easy21 {
-    req: SyncSender<learn::Req<MCControlState>>,
-    resp: Receiver<MCControlState>,
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Algorithm {
+    MonteCarloPrediction,
+    MonteCarloControl,
+    TDLambdaPrediction,
+    TDLambdaControl,
+    ApproxTDLambdaControl,
+}
 
-    chart: egui_plotter::Chart<MCControlState>,
+impl Algorithm {
+    fn initial_state(&self) -> Box<dyn Easy21State> {
+        match self {
+            Self::MonteCarloPrediction => Box::new(MCState::init(example_policy)),
+            Self::MonteCarloControl => Box::new(MCControlState::init()),
+            Self::TDLambdaPrediction => Box::new(TDState::init(example_policy)),
+            Self::TDLambdaControl => Box::new(TDControlState::init()),
+            Self::ApproxTDLambdaControl => Box::new(ApproxState::init()),
+        }
+
+    }
+}
+
+pub struct Easy21 {
+    rng: rand::prelude::ThreadRng,
+    updates_per_frame: i32,
+    algorithm: Algorithm,
+    chart: egui_plotter::Chart<Box<dyn Easy21State>>,
     rms: Vec<(f64, f64)>,
 }
 
@@ -23,15 +43,9 @@ impl Default for Easy21 {
 
 impl Easy21 {
     pub fn new() -> Self {
-        let (req, resp) = learn::queryable_state(MCControlState::init(), |rng, s|
-            // monte_carlo_prediction(rng, easy_21::example_policy, s)
-            monte_carlo_control(rng, s)
-            // td_lambda_prediction(rng, 0.5, easy_21::example_policy, s)
-            // td_lambda_control(rng, 0.6, s)
-            // approx_td_lambda_control(rng, 0.1, s)
-        );
-
-        let chart = egui_plotter::Chart::new(MCControlState::init())
+        let algorithm = Algorithm::MonteCarloControl;
+        let state = algorithm.initial_state();
+        let chart = egui_plotter::Chart::new(state)
             .mouse(egui_plotter::MouseConfig::enabled())
             .pitch(0.2)
             .yaw(-0.5)
@@ -89,7 +103,7 @@ impl Easy21 {
                         states
                             .iter()
                             .filter(|s| {
-                                state.q.get_q(s, &Action::Hit) >= state.q.get_q(s, &Action::Stick)
+                                state.policy(s) == Action::Hit
                             })
                             .map(|s| {
                                 Polygon::new(
@@ -107,8 +121,9 @@ impl Easy21 {
             }));
 
         Self {
-            req,
-            resp,
+            rng: rand::thread_rng(),
+            updates_per_frame: 50,
+            algorithm,
             chart,
             rms: vec![],
         }
@@ -116,26 +131,46 @@ impl Easy21 {
 
     pub fn show(&mut self, ctx: &egui::Context) {
         let state = self.chart.get_data_mut();
-        for s in self.resp.try_iter() {
-            *state = s;
+        let start_time = web_time::Instant::now();
+        for _ in 0..self.updates_per_frame {
+            state.update(&mut self.rng);
         }
-
-        // Request state (to be available hopefully in the next frame).
-        if let Err(TrySendError::Disconnected(_)) = self.req.try_send(learn::Req::GetState) {
-            panic!("Could not request state: Disconnected")
-        }
+        let elapsed = start_time.elapsed();
+        let target_time_per_frame = 1_000_000.0 / 80.0;
+        self.updates_per_frame = (self.updates_per_frame as f64 * target_time_per_frame / elapsed.as_micros() as f64).round() as i32;
 
         egui::Window::new("Easy21").show(ctx, |ui| {
+            egui::ComboBox::from_label("Algorithm")
+                .selected_text(format!("{:?}", self.algorithm))
+                .show_ui(ui, |ui| {
+                    ui.style_mut().wrap = Some(false);
+                    ui.set_min_width(60.0);
+                    let algos = [
+                        Algorithm::MonteCarloControl,
+                        Algorithm::MonteCarloPrediction,
+                        Algorithm::TDLambdaPrediction,
+                        Algorithm::TDLambdaControl,
+                        Algorithm::ApproxTDLambdaControl,
+                    ];
+                    for algo in algos {
+                        if ui.selectable_value(&mut self.algorithm, algo, format!("{:?}", &algo)).clicked() {
+                            self.rms = vec![];
+                            *state = self.algorithm.initial_state();
+                        }
+                    }
+                });
 
-            if ui.button("Reset").clicked() {
-                self.rms = vec![];
-                self.req.send(learn::Req::SetState {
-                    state: MCControlState::init(),
-                })
-                .unwrap();
-            }
+            ui.add_space(5.0);
 
-            ui.label(format!("Episodes: {}", state.episodes));
+            Grid::new("grid").num_columns(2).show(ui, |ui| {
+                ui.label("Episodes:");
+                ui.label(state.episodes().to_string());
+                ui.end_row();
+
+                ui.label("Updates per frame:");
+                ui.label(self.updates_per_frame.to_string());
+                ui.end_row();
+            });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -155,8 +190,8 @@ impl Easy21 {
         // 2D
         let area = egui_plotter::EguiBackend::new(&right_ui).into_drawing_area();
         let state = self.chart.get_data();
-        if state.episodes > 1 && ui.ctx().frame_nr() % 5 == 0 {
-            self.rms.push((state.episodes as f64 / 1_000_000.0, state.q.rms_error()));
+        if state.episodes() > 1 && ui.ctx().frame_nr() % 2 == 0 {
+            self.rms.push((state.episodes() as f64 / 1_000_000.0, state.rms_error()));
         }
 
         let last = self.rms.last().map_or(0.1, |x| x.0).max(1.0);
@@ -176,6 +211,13 @@ impl Easy21 {
             .draw_series(LineSeries::new(self.rms.clone(), &BLACK))
             .unwrap();
     }
+}
+
+trait Easy21State: HasV {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng);
+    fn episodes(&self) -> i32;
+    fn policy(&self, state: &State) -> Action;
+    fn rms_error(&self) -> f64;
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -240,16 +282,14 @@ pub struct Sample {
 }
 
 fn is_bust(x: i32) -> bool {
-    x < 1 || x > 21
+    !(1..=21).contains(&x)
 }
 
 fn signum(x: i32) -> i32 {
-    if x > 0 {
-        1
-    } else if x < 0 {
-        -1
-    } else {
-        0
+    match x.cmp(&0) {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
     }
 }
 
@@ -482,13 +522,15 @@ pub fn episode<R: Rng, P: Fn(&mut R, &State) -> Action>(
 pub struct MCState {
     pub v: V<(f64, i32)>,
     pub episodes: i32,
+    pub policy: fn(&mut rand::prelude::ThreadRng, &State) -> Action,
 }
 
 impl MCState {
-    pub fn init() -> Self {
+    pub fn init(policy: fn(&mut rand::prelude::ThreadRng, &State) -> Action) -> Self {
         Self {
             v: V::init((0.0, 0)),
             episodes: 0,
+            policy,
         }
     }
 }
@@ -496,6 +538,21 @@ impl MCState {
 impl HasV for MCState {
     fn get_v(&self, state: &State) -> f64 {
         self.v.get(state).0
+    }
+}
+
+impl Easy21State for MCState {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng) {
+        monte_carlo_prediction(rng, self.policy, self);
+    }
+    fn episodes(&self) -> i32 {
+        self.episodes
+    }
+    fn policy(&self, state: &State) -> Action {
+        (self.policy)(&mut rand::thread_rng(), state)
+    }
+    fn rms_error(&self) -> f64 {
+        0.0
     }
 }
 
@@ -560,6 +617,25 @@ impl HasV for MCControlState {
     }
 }
 
+impl Easy21State for MCControlState {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng) {
+        monte_carlo_control(rng, self);
+    }
+    fn episodes(&self) -> i32 {
+        self.episodes
+    }
+    fn policy(&self, state: &State) -> Action {
+        if self.q.get(state, &Action::Hit) > self.q.get(state, &Action::Stick) {
+            Action::Hit
+        } else {
+            Action::Stick
+        }
+    }
+    fn rms_error(&self) -> f64 {
+        self.q.rms_error()
+    }
+}
+
 pub fn monte_carlo_control<R: Rng>(rng: &mut R, mc_state: &mut MCControlState) {
     let (state_actions, reward) = greedy_episode(rng, mc_state);
     for (state, action) in state_actions {
@@ -591,14 +667,16 @@ pub struct TDState {
     pub v: V<(f64, i32)>,
     pub eligibility_traces: V<f64>,
     pub episodes: i32,
+    pub policy: fn(&mut rand::prelude::ThreadRng, &State) -> Action,
 }
 
 impl TDState {
-    pub fn init() -> Self {
+    pub fn init(policy: fn(&mut rand::prelude::ThreadRng, &State) -> Action) -> Self {
         Self {
             v: V::init((0.0, 0)),
             eligibility_traces: V::init(0.0),
             episodes: 0,
+            policy,
         }
     }
 }
@@ -606,6 +684,21 @@ impl TDState {
 impl HasV for TDState {
     fn get_v(&self, state: &State) -> f64 {
         self.v.get(state).0
+    }
+}
+
+impl Easy21State for TDState {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng) {
+        td_lambda_prediction(rng, 0.5, self.policy, self);
+    }
+    fn episodes(&self) -> i32 {
+        self.episodes
+    }
+    fn policy(&self, state: &State) -> Action {
+        (self.policy)(&mut rand::thread_rng(), state)
+    }
+    fn rms_error(&self) -> f64 {
+        0.0
     }
 }
 
@@ -671,6 +764,25 @@ impl TDControlState {
 impl HasV for TDControlState {
     fn get_v(&self, state: &State) -> f64 {
         self.v.get(state).0
+    }
+}
+
+impl Easy21State for TDControlState {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng) {
+        td_lambda_control(rng, 0.6, self);
+    }
+    fn episodes(&self) -> i32 {
+        self.episodes
+    }
+    fn policy(&self, state: &State) -> Action {
+        if self.q.get(state, &Action::Hit) > self.q.get(state, &Action::Stick) {
+            Action::Hit
+        } else {
+            Action::Stick
+        }
+    }
+    fn rms_error(&self) -> f64 {
+        self.rms_error
     }
 }
 
@@ -815,6 +927,25 @@ impl HasQ for ApproxState {
     }
 }
 
+impl Easy21State for ApproxState {
+    fn update(&mut self, rng: &mut rand::prelude::ThreadRng) {
+        approx_td_lambda_control(rng, 0.1, self);
+    }
+    fn episodes(&self) -> i32 {
+        self.episodes
+    }
+    fn policy(&self, state: &State) -> Action {
+        if self.get_q(state, &Action::Hit) > self.get_q(state, &Action::Stick) {
+            Action::Hit
+        } else {
+            Action::Stick
+        }
+    }
+    fn rms_error(&self) -> f64 {
+        self.rms_error
+    }
+}
+
 pub fn approx_td_lambda_control<R: Rng>(rng: &mut R, lambda: f64, approx_state: &mut ApproxState) {
     approx_state.eligibility_traces = Vector::init();
     let mut state = State::init(rng);
@@ -854,30 +985,6 @@ pub fn approx_td_lambda_control<R: Rng>(rng: &mut R, lambda: f64, approx_state: 
     approx_state.episodes += 1;
     if approx_state.episodes % 1000 == 0 {
         approx_state.rms_error = 0.0 // approx_state.q.rms_error();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cuboid_features() {
-        assert_eq!(
-            Vector::cuboid_features(
-                &State {
-                    player: 4,
-                    dealer: 4
-                },
-                &Action::Stick
-            )
-            .w,
-            vec![
-                0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0
-            ]
-        )
     }
 }
 
@@ -4255,5 +4362,29 @@ impl Q<(f64, i32)> {
                 diff * diff
             })
             .sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cuboid_features() {
+        assert_eq!(
+            Vector::cuboid_features(
+                &State {
+                    player: 4,
+                    dealer: 4
+                },
+                &Action::Stick
+            )
+            .w,
+            vec![
+                0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0
+            ]
+        )
     }
 }
